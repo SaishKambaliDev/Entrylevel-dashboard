@@ -4,10 +4,48 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>dashboard</title>
+    <title>JanSamadhan</title>
+    <!-- Apply saved language before React mounts so translation is immediate -->
+    <script>
+      (function () {
+        try {
+          var prefs = JSON.parse(localStorage.getItem('jansamadhanPreferences') || '{}');
+          var lang = prefs.language || 'en';
+          if (lang && lang !== 'en') {
+            document.cookie = 'googtrans=/en/' + lang + ';path=/';
+            document.cookie = 'googtrans=/en/' + lang + ';path=/;domain=' + location.hostname;
+          } else {
+            // Clear any old translation cookie when language is English
+            document.cookie = 'googtrans=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT';
+            document.cookie = 'googtrans=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT;domain=' + location.hostname;
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Headless Google Translate engine — no widget, just translation -->
+    <style>
+      /* Hide Google Translate's own injected top bar completely */
+      body > .skiptranslate,
+      .goog-te-banner-frame,
+      #goog-gt-tt,
+      .goog-tooltip,
+      .goog-tooltip:hover,
+      .goog-text-highlight { display: none !important; }
+      body { top: 0 !important; }
+      iframe.skiptranslate { display: none !important; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <!-- Load GT engine headlessly after app boots -->
+    <script>
+      window.__jansamadhanGtInit = function () {
+        try {
+          new google.translate.TranslateElement({ pageLanguage: 'en', autoDisplay: false }, '__gt_noop');
+        } catch (e) {}
+      };
+    </script>
+    <script src="https://translate.googleapis.com/translate_a/element.js?cb=__jansamadhanGtInit" async defer></script>
   </body>
 </html>

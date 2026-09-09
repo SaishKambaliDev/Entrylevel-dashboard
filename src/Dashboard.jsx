@@ -1,6 +1,9 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import heroMap from "./assets/hero.png";
+import lightLogo from "./assets/logoli.png";
+import darkLogo from "./assets/logoda.png";
+import UtilityBar, { ProfileMenu } from "./UtilityBar";
+import { getCurrentUser, usePreferences } from "./usePreferences";
 import "./Dashboard.css";
 
 const aboutCards = [
@@ -12,27 +15,45 @@ const aboutCards = [
 const contributors = ["Citizens", "Universities / HEIs", "Industries & Startups", "Government / Local Bodies"];
 
 function Dashboard() {
-  const [theme, setTheme] = useState("light");
-  const [accessibilityOpen, setAccessibilityOpen] = useState(false);
-  const [textScale, setTextScale] = useState("normal");
+  const [preferences, updatePreferences] = usePreferences();
+  const theme = preferences.theme;
+  const textScale = preferences.textScale;
+  const user = getCurrentUser();
+  let reportProblemPath = "/login";
+  let isCitizen = false;
+  let isHei = false;
+  let isIndustry = false;
+  let isGovernment = false;
+  try {
+    const user = JSON.parse(sessionStorage.getItem("jansamadhanUser") || "null");
+    isCitizen = Boolean(sessionStorage.getItem("jansamadhanAuthToken") && user?.role === "CITIZEN");
+    isHei = Boolean(sessionStorage.getItem("jansamadhanAuthToken") && ["HEI_ADMIN", "FACULTY", "STUDENT"].includes(user?.role));
+    isIndustry = Boolean(sessionStorage.getItem("jansamadhanAuthToken") && ["INDUSTRY_ADMIN", "INDUSTRY_MENTOR"].includes(user?.role));
+    isGovernment = Boolean(sessionStorage.getItem("jansamadhanAuthToken") && user?.role === "GOVERNMENT");
+    if (isCitizen) reportProblemPath = "/report-problem";
+    if (isGovernment) reportProblemPath = "/government";
+  } catch (_error) {
+    // Invalid session data follows the normal login path.
+  }
 
   return (
     <div className={`dashboard theme-${theme} text-${textScale}`}>
-      <div className="accessibility-bar">
-        <button className="accessibility-trigger" type="button" onClick={() => setAccessibilityOpen(!accessibilityOpen)} aria-expanded={accessibilityOpen}>Accessibility</button>
-        <button className="theme-button is-active" type="button" onClick={() => setTheme(theme === "light" ? "dark" : "light")} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}>{theme === "light" ? "Dark Theme" : "Light Theme"}</button>
-        {accessibilityOpen && <div className="accessibility-panel" aria-label="Text size controls"><span>Text size</span><button className={textScale === "small" ? "is-selected" : ""} type="button" onClick={() => setTextScale("small")}>A−</button><button className={textScale === "normal" ? "is-selected" : ""} type="button" onClick={() => setTextScale("normal")}>A</button><button className={textScale === "large" ? "is-selected" : ""} type="button" onClick={() => setTextScale("large")}>A+</button></div>}
-      </div>
+      <UtilityBar preferences={preferences} updatePreferences={updatePreferences} showProfile={false} />
 
       <header className="navbar">
-        <Link className="logo" to="/" aria-label="SolveTogether home">SolveTogether</Link>
+        <Link className="logo" to="/" aria-label="JanSamadhan home">
+          <img src={theme === "light" ? lightLogo : darkLogo} alt="JanSamadhan — Initiative by Government of Jharkhand" />
+        </Link>
         <nav className="nav-links" aria-label="Main navigation">
           <a href="#home">Home</a>
           <a href="#problems">Problems</a>
           <a href="#about">About</a>
           <a href="#contact">Contact</a>
-          <Link to="/login">Login</Link>
-          <Link className="signup-btn" to="/login">Sign Up</Link>
+          {isCitizen && <Link to="/track-problems">Track Problems</Link>}
+          {isHei && <Link to="/hei">HEI Portal</Link>}
+          {isIndustry && <Link to="/industry">Industry Portal</Link>}
+          {isGovernment && <Link to="/government">Government Portal</Link>}
+          {user ? <ProfileMenu /> : <><Link to="/login">Login</Link><Link className="signup-btn" to="/register">Sign Up</Link></>}
         </nav>
       </header>
 
@@ -46,8 +67,12 @@ function Dashboard() {
             <p className="eyebrow">Together, for Jharkhand</p>
             <h1><span>See a Problem?</span><br />Report it. We&rsquo;ll solve it.</h1>
             <div className="hero-actions">
-              <Link className="report-btn" to="/login">Report a Problem</Link>
-              <a className="explore-link" href="#problems">Explore Problems</a>
+              <Link className="report-btn" to={reportProblemPath}>Report a Problem</Link>
+              {isCitizen && <Link className="explore-link" to="/track-problems">Track My Reports</Link>}
+              {isHei && <Link className="explore-link" to="/hei">Go to HEI Portal</Link>}
+              {isIndustry && <Link className="explore-link" to="/industry">Go to Industry Portal</Link>}
+              {isGovernment && <Link className="explore-link" to="/government">Go to Government Portal</Link>}
+              {!isCitizen && !isHei && !isIndustry && !isGovernment && <a className="explore-link" href="#problems">Explore Problems</a>}
             </div>
           </div>
           <div className="map-wrap" aria-hidden="true"><img src={heroMap} alt="" /></div>
