@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
 import lightLogo from "./assets/logoli.png";
 import UtilityBar from "./UtilityBar";
@@ -44,10 +44,36 @@ function TrackProblems() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   const [retrying, setRetrying] = useState(false);
+  // AI Analysis modal state shown immediately after submission
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiPhase, setAiPhase] = useState("loading"); // loading | complete | failed
+  const [aiResult, setAiResult] = useState(null);
+  const aiPollRef = useRef(null);
 
   useEffect(() => {
     loadProblems();
   }, []);
+
+  // When user came from submission, show the AI analysis modal and poll the problem detail
+  useEffect(() => {
+    let mounted = true;
+    // If route indicates a just-submitted report, show the modal once we have loaded problems
+    if (routeLocation.state?.submitted) {
+      // If problems already loaded and we have selectedProblemId, handle it
+      if (!loading && selectedProblemId) {
+        setShowAiModal(true);
+      } else {
+        // Otherwise, wait for problems to finish loading and then show modal
+        const unlisten = () => {
+          if (!mounted) return;
+          if (!loading && selectedProblemId) setShowAiModal(true);
+        };
+        // Poll until load completes (a short lived watcher)
+        const watcher = setInterval(() => { if (!loading && selectedProblemId) { unlisten(); clearInterval(watcher); } }, 300);
+      }
+    }
+    return () => { mounted = false; };
+  }, [routeLocation.state, loading, selectedProblemId]);
 
   const loadProblems = async () => {
     setLoading(true);
@@ -71,8 +97,10 @@ function TrackProblems() {
     try {
       const data = await authenticatedRequest(`/problems/my/${id}`);
       setProblemDetails(data);
+      return data;
     } catch (err) {
       setError(err.message || "Failed to load problem tracking details.");
+      return null;
     } finally {
       setDetailLoading(false);
     }
@@ -80,6 +108,9 @@ function TrackProblems() {
 
   const handleSelectProblem = (id) => {
     setSelectedProblemId(id);
+    // Stop any AI polling for previous modal
+    if (aiPollRef.current) { clearInterval(aiPollRef.current); aiPollRef.current = null; }
+    setShowAiModal(false); setAiPhase("loading"); setAiResult(null);
     loadDetails(id);
   };
 
@@ -94,6 +125,61 @@ function TrackProblems() {
   };
 
   const currentStageIndex = problemDetails ? getStageIndex(problemDetails.problem.status) : 0;
+
+  // Poll the existing problem detail API for AI status while the modal is shown
+  useEffect(() => {
+    if (!showAiModal || !selectedProblemId) return undefined;
+    let active = true;
+    setAiPhase("loading");
+    setAiResult(null);
+
+    async function check() {
+      try {
+        const latest = await authenticatedRequest(`/problems/my/${selectedProblemId}`);
+        if (!active) return;
+        // Update local problem details too
+        setProblemDetails(latest);
+        const status = latest.problem.ai?.processingStatus || "PENDING";
+        if (status === "PENDING" || status === "PROCESSING") {
+          setAiPhase("loading");
+          return;
+        }
+        if (status === "FAILED") {
+          setAiPhase("failed");
+          // show briefly then close
+          setTimeout(() => { setShowAiModal(false); setAiPhase("loading"); }, 2200);
+          return;
+        }
+        // COMPLETED or NEEDS_REVIEW -> present summarized result
+        const ai = latest.problem.ai || {};
+        const recommendations = Array.isArray(ai.recommendations) ? ai.recommendations : [];
+        const existingSolution = ai.solutionStatus === "EXISTING_SOLUTION" || recommendations.some((r) => r.type === "PROJECT");
+        const schemeFound = ai.solutionStatus === "GOVERNMENT_SCHEME" || recommendations.some((r) => r.type === "GOVERNMENT_SCHEME");
+        const accepted = ai.processingStatus === "COMPLETED" && ai.isCommunityProblem === true && ["GENERAL_GOVERNMENT","COLLABORATIVE"].includes(ai.classification);
+        const result = {
+          accepted,
+          classification: ai.classification || null,
+          responsibleStakeholder: ai.responsibleStakeholder || null,
+          existingSolution,
+          schemeFound,
+          priority: typeof ai.finalPriorityScore === "number" ? ai.finalPriorityScore : (typeof ai.aiPriorityScore === "number" ? ai.aiPriorityScore : null),
+        };
+        setAiResult(result);
+        setAiPhase("complete");
+        // After brief display, automatically close the modal and proceed
+        setTimeout(() => { setShowAiModal(false); setAiPhase("loading"); }, 2600);
+      } catch (err) {
+        // If polling fails (network), treat as failed analysis after a short retry window
+        console.warn("AI poll failed:", err);
+      }
+    }
+
+    // Initial immediate check then interval
+    check();
+    aiPollRef.current = setInterval(check, 2500);
+
+    return () => { active = false; if (aiPollRef.current) { clearInterval(aiPollRef.current); aiPollRef.current = null; } };
+  }, [showAiModal, selectedProblemId]);
 
   return (
     <div className={`track-page track-theme-${preferences.theme}`}>
@@ -117,6 +203,44 @@ function TrackProblems() {
 
       <main className="track-main">
         {routeLocation.state?.submitted && <div className="track-success" role="status">Your report was saved. AI processing is now underway.</div>}
+
+        {/* AI Analysis Modal shown immediately after submission */}
+        {showAiModal && (
+          <div className="ai-modal-overlay" role="dialog" aria-modal="true" aria-label="AI Analysis">
+            <div className="ai-modal-card" role="document">
+              {aiPhase === "loading" && (
+                <div className="ai-modal-center">
+                  <div className="ai-spinner" aria-hidden="true"><span /></div>
+                  <h3>Analyzing your problem...</h3>
+                  <p className="ai-sub">JanSamadhan is identifying the domain and appropriate routing. This usually takes a few seconds.</p>
+                </div>
+              )}
+
+              {aiPhase === "complete" && aiResult && (
+                <div className="ai-modal-center">
+                  <div className="ai-result-icon">{aiResult.accepted ? "✓" : "✕"}</div>
+                  <h3>{aiResult.accepted ? "Problem accepted" : "Problem not suitable / needs review"}</h3>
+
+                  <div className="ai-summary">
+                    <div><strong>Domain:</strong> {aiResult.classification || "Not available"}</div>
+                    <div><strong>Responsible:</strong> {aiResult.responsibleStakeholder || "Not available"}</div>
+                    <div><strong>Existing solution found:</strong> {aiResult.existingSolution ? "Yes" : "No"}</div>
+                    <div><strong>Government scheme found:</strong> {aiResult.schemeFound ? "Yes" : "No"}</div>
+                    <div><strong>Priority:</strong> {typeof aiResult.priority === "number" ? `${aiResult.priority}/100` : "Not available"}</div>
+                  </div>
+                </div>
+              )}
+
+              {aiPhase === "failed" && (
+                <div className="ai-modal-center">
+                  <div className="ai-result-icon">⚠️</div>
+                  <h3>AI analysis unavailable</h3>
+                  <p className="ai-sub">We couldn't complete automated analysis at this time. You can still track the problem below.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {error && <div className="track-error" role="alert">{error}</div>}
 
         {loading ? (
@@ -229,6 +353,15 @@ function TrackProblems() {
                   <div className="detail-section">
                     <h4>AI processing</h4>
                     <p>{problemDetails.problem.ai?.processingStatus || "PENDING"}{problemDetails.problem.ai?.classification ? ` · ${problemDetails.problem.ai.classification.replaceAll("_", " ")}` : ""}</p>
+
+                    {/* Show backend-provided AI error (truncated) to aid debugging */}
+                    {problemDetails.problem.ai?.error && (
+                      <div className="ai-error" style={{ marginTop: 8 }}>
+                        <strong>AI error:</strong>
+                        <pre className="ai-error-text" style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{String(problemDetails.problem.ai.error).slice(0, 1000)}</pre>
+                      </div>
+                    )}
+
                     {["FAILED", "NEEDS_REVIEW"].includes(problemDetails.problem.ai?.processingStatus) && <button type="button" className="btn-primary-action" disabled={retrying} onClick={retryAi}>{retrying ? "Retrying…" : "Retry AI processing"}</button>}
                   </div>
 
